@@ -447,14 +447,14 @@ app.post("/api/papers/:id/download", async (req, res) => {
 // ─── SEARCH: LOCAL (WITH LOCATION & SCHOOL FILTERS) ────────────────────────
 app.get("/api/search/local", async (req, res) => {
   try {
-    const { q, page = 1, limit = 10, region, city, school } = req.query;
+    const { q, page = 1, limit = 10, region, city, school, yearFrom, yearTo } = req.query;
     
     if (!q || q.length < 2) {
       return res.json({ results: [], total: 0, query: q });
     }
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    console.log(`[SEARCH] Query: "${q}" | Region: ${region} | City: ${city} | School: ${school}`);
+    console.log(`[SEARCH] Query: "${q}" | Region: ${region} | City: ${city} | School: ${school} | yearFrom: ${yearFrom} | yearTo: ${yearTo}`);
     
     const words = q.trim().split(/\s+/);
     const regexPatterns = words.map(word => new RegExp(word, "i"));
@@ -481,6 +481,12 @@ app.get("/api/search/local", async (req, res) => {
     }
     if (school && school !== "all") {
       filter.school = new RegExp(school, "i");
+    }
+    // ✅ FIX Issue 3: apply year range filter if provided
+    if (yearFrom || yearTo) {
+      filter.year = {};
+      if (yearFrom) filter.year.$gte = parseInt(yearFrom);
+      if (yearTo) filter.year.$lte = parseInt(yearTo);
     }
     
     const results = await db.collection("researchpapers")

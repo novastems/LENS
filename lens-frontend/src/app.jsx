@@ -271,6 +271,10 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
   const [city, setCity] = useState("");
   const [school, setSchool] = useState("all");
   const [schools, setSchools] = useState([]);
+  // ✅ FIX Issue 3: year range filter state
+  const [yearRange, setYearRange] = useState("all");
+  const [customYearFrom, setCustomYearFrom] = useState("");
+  const [customYearTo, setCustomYearTo] = useState("");
   const debounceTimer = useRef(null);
   const hasExecutedInitialSearch = useRef(false);
 
@@ -305,11 +309,22 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
   useEffect(() => {
     if (initialQuery && !hasExecutedInitialSearch.current) {
       hasExecutedInitialSearch.current = true;
-      doSearch(initialQuery, "all", "", "all");
+      doSearch(initialQuery, "all", "", "all", "all", "", "");
     }
   }, [initialQuery]);
 
-  const doSearch = useCallback(async (q, selectedRegion, selectedCity, selectedSchool) => {
+  // ✅ FIX Issue 3: resolve yearFrom/yearTo from the selected range
+  const resolveYearParams = (range, customFrom, customTo) => {
+    const currentYear = new Date().getFullYear();
+    if (range === "5") return { yearFrom: currentYear - 5, yearTo: currentYear };
+    if (range === "10") return { yearFrom: currentYear - 10, yearTo: currentYear };
+    if (range === "15") return { yearFrom: currentYear - 15, yearTo: currentYear };
+    if (range === "20") return { yearFrom: currentYear - 20, yearTo: currentYear };
+    if (range === "custom") return { yearFrom: customFrom || "", yearTo: customTo || "" };
+    return { yearFrom: "", yearTo: "" };
+  };
+
+  const doSearch = useCallback(async (q, selectedRegion, selectedCity, selectedSchool, selectedYearRange, selectedCustomFrom, selectedCustomTo) => {
     if (!q || q.length < 2) {
       setResults([]);
       setSearched(false);
@@ -330,8 +345,14 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
     try {
       const regionParam = selectedRegion === "all" ? "" : selectedRegion;
       const schoolParam = selectedSchool === "all" ? "" : selectedSchool;
-      
-      const response = await fetch(`${API_BASE}/search/local?q=${encodeURIComponent(q)}&region=${encodeURIComponent(regionParam)}&city=${encodeURIComponent(selectedCity)}&school=${encodeURIComponent(schoolParam)}`);
+      // ✅ FIX Issue 3: compute year params and append to request
+      const { yearFrom, yearTo } = resolveYearParams(selectedYearRange, selectedCustomFrom, selectedCustomTo);
+
+      let url = `${API_BASE}/search/local?q=${encodeURIComponent(q)}&region=${encodeURIComponent(regionParam)}&city=${encodeURIComponent(selectedCity)}&school=${encodeURIComponent(schoolParam)}`;
+      if (yearFrom) url += `&yearFrom=${yearFrom}`;
+      if (yearTo) url += `&yearTo=${yearTo}`;
+
+      const response = await fetch(url);
       const data = await response.json();
       setResults(data.results || []);
       
@@ -357,7 +378,7 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
 
     clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
-      doSearch(value, region, city, school);
+      doSearch(value, region, city, school, yearRange, customYearFrom, customYearTo);
     }, 300);
   };
 
@@ -365,14 +386,24 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
     setRegion(newRegion);
     setCity(newCity);
     setSchool(newSchool);
-    doSearch(inputVal, newRegion, newCity, newSchool);
+    doSearch(inputVal, newRegion, newCity, newSchool, yearRange, customYearFrom, customYearTo);
+  };
+
+  // ✅ FIX Issue 3: year range change handler
+  const handleYearRangeChange = (newRange) => {
+    setYearRange(newRange);
+    if (newRange !== "custom") {
+      doSearch(inputVal, region, city, school, newRange, "", "");
+    }
   };
 
   const handleKeyPress = (e) => {
     if (e.key === "Enter") {
-      doSearch(inputVal, region, city, school);
+      doSearch(inputVal, region, city, school, yearRange, customYearFrom, customYearTo);
     }
   };
+
+  const hasActiveFilters = region !== "all" || city || school !== "all" || yearRange !== "all";
 
   return (
     <div className="main">
@@ -385,7 +416,7 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
             placeholder="Search LENS Repository papers..."
             style={{ color: "var(--navy)", background: "transparent" }}
           />
-          <button className="btn-search" onClick={() => doSearch(inputVal, region, city, school)}>Search</button>
+          <button className="btn-search" onClick={() => doSearch(inputVal, region, city, school, yearRange, customYearFrom, customYearTo)}>Search</button>
         </div>
 
         <div style={{ background: "var(--white)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "1rem", marginBottom: "1rem" }}>
@@ -407,13 +438,61 @@ function SearchPage({ onViewPaper, onSearchStateChange, initialQuery = "" }) {
                 {schools.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            {/* ✅ FIX Issue 3: Publication year filter */}
+            <div>
+              <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.35rem", color: "var(--slate)" }}>Publication Year</label>
+              <select className="form-input form-select" value={yearRange} onChange={e => handleYearRangeChange(e.target.value)}>
+                <option value="all">All years</option>
+                <option value="5">Last 5 years</option>
+                <option value="10">Last 10 years</option>
+                <option value="15">Last 15 years</option>
+                <option value="20">Last 20 years</option>
+                <option value="custom">Custom range</option>
+              </select>
+            </div>
           </div>
-          {(region !== "all" || city || school !== "all") && (
+          {/* ✅ FIX Issue 3: custom year range inputs */}
+          {yearRange === "custom" && (
+            <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.75rem", alignItems: "flex-end" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.35rem", color: "var(--slate)" }}>From year</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  placeholder="e.g. 2015"
+                  style={{ width: "120px" }}
+                  value={customYearFrom}
+                  onChange={e => setCustomYearFrom(e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.35rem", color: "var(--slate)" }}>To year</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  placeholder="e.g. 2024"
+                  style={{ width: "120px" }}
+                  value={customYearTo}
+                  onChange={e => setCustomYearTo(e.target.value)}
+                />
+              </div>
+              <button
+                className="btn-sm btn-primary"
+                onClick={() => doSearch(inputVal, region, city, school, "custom", customYearFrom, customYearTo)}
+              >
+                Apply
+              </button>
+            </div>
+          )}
+          {hasActiveFilters && (
             <button className="btn-sm btn-outline" style={{ marginTop: "0.75rem" }} onClick={() => {
               setRegion("all");
               setCity("");
               setSchool("all");
-              doSearch(inputVal, "all", "", "all");
+              setYearRange("all");
+              setCustomYearFrom("");
+              setCustomYearTo("");
+              doSearch(inputVal, "all", "", "all", "all", "", "");
             }}>
               Clear Filters
             </button>
@@ -504,9 +583,9 @@ function PaperDetail({ paper, onBack, showToast }) {
     }
   };
 
-  // ✅ NEW: Handle share button
+  // ✅ FIX Issue 1: copy the correct hash URL that includes the paper ID
   const handleShare = () => {
-    const url = `${window.location.origin}${window.location.pathname}`;
+    const url = `${window.location.origin}${window.location.pathname}#/paper/${paper._id}`;
     navigator.clipboard.writeText(url).then(() => {
       showToast("Link copied successfully");
     }).catch(e => {
@@ -1290,7 +1369,7 @@ function CopyrightPage() {
   );
 }
 
-function AuthModal({ mode, onClose, onSuccess, showToast }) {
+function AuthModal({ mode, onClose, onSuccess, showToast, onNavigate }) {
   const [tab, setTab] = useState(mode);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ email: "", password: "", name: "" });
@@ -1386,7 +1465,11 @@ function AuthModal({ mode, onClose, onSuccess, showToast }) {
                 onChange={e => setAgreedToTerms(e.target.checked)}
               />
               <label htmlFor="terms">
-                I have read and agree to the <button style={{ background: "none", border: "none", color: "var(--navy)", cursor: "pointer", textDecoration: "underline" }} onClick={() => window.open("#/terms")}>Terms and Conditions</button> and <button style={{ background: "none", border: "none", color: "var(--navy)", cursor: "pointer", textDecoration: "underline" }} onClick={() => window.open("#/privacy")}>Privacy Policy</button>
+                I have read and agree to the{" "}
+                {/* ✅ FIX Issue 2: use onNavigate instead of window.open */}
+                <button style={{ background: "none", border: "none", color: "var(--navy)", cursor: "pointer", textDecoration: "underline" }} onClick={() => { onClose(); onNavigate("terms"); }}>Terms and Conditions</button>
+                {" "}and{" "}
+                <button style={{ background: "none", border: "none", color: "var(--navy)", cursor: "pointer", textDecoration: "underline" }} onClick={() => { onClose(); onNavigate("privacy"); }}>Privacy Policy</button>
               </label>
             </div>
           </>
@@ -1440,6 +1523,30 @@ export default function App() {
         localStorage.removeItem("auth_user");
       }
     }
+
+    // ✅ FIX Issue 1: read hash on initial load and route to paper if present
+    const hash = window.location.hash;
+    if (hash.startsWith("#/paper/")) {
+      const paperId = hash.replace("#/paper/", "");
+      if (paperId) {
+        api.getPaper(paperId)
+          .then(paper => {
+            if (paper && paper._id) {
+              setViewingPaper(paper);
+              setPage("paper");
+            }
+          })
+          .catch(e => console.error("Failed to load paper from link:", e))
+          .finally(() => setLoading(false));
+        return;
+      }
+    } else if (hash === "#/terms") {
+      setPage("terms");
+    } else if (hash === "#/privacy") {
+      setPage("privacy");
+    } else if (hash === "#/about") {
+      setPage("about");
+    }
     
     setLoading(false);
   }, []);
@@ -1464,17 +1571,14 @@ export default function App() {
 
   const navigate = (p, searchQuery = null, paperData = null, currentSearchState = null) => {
     if (p === "paper" && paperData) {
-      const newState = {
-        page: p,
-        paper: paperData,
-        searchState: currentSearchState || searchState
-      };
-      window.history.pushState(newState, "", window.location.href);
+      // ✅ FIX Issue 1: update hash in URL when viewing a paper
+      const newHash = `#/paper/${paperData._id}`;
+      window.history.pushState({ page: p, paper: paperData, searchState: currentSearchState || searchState }, "", newHash);
       setViewingPaper(paperData);
       setPage(p);
     } else if (p === "search" && searchQuery) {
       const newState = { page: p, paper: null, searchState: null };
-      window.history.replaceState(newState, "", window.location.href);
+      window.history.replaceState(newState, "", window.location.pathname);
       setPage(p);
       setViewingPaper(null);
       setSearchQuery(searchQuery);
@@ -1488,7 +1592,7 @@ export default function App() {
       });
     } else {
       const newState = { page: p, paper: null, searchState: null };
-      window.history.replaceState(newState, "", window.location.href);
+      window.history.replaceState(newState, "", window.location.pathname);
       setPage(p);
       setViewingPaper(null);
     }
@@ -1574,6 +1678,7 @@ export default function App() {
           onClose={() => setAuthModal(null)} 
           onSuccess={(userData) => setUser(userData)} 
           showToast={showToast}
+          onNavigate={navigate}
         />
       )}
 
