@@ -282,6 +282,10 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
       if (resetEmailClient) {
         try {
+            console.log("User found:", email);
+            console.log("Reset link:", resetLink);
+            console.log("About to send reset email...");
+          
           await resetEmailClient.emails.send({
             from: process.env.RESET_EMAIL_FROM || "LENS <onboarding@resend.dev>",
             to: email,
@@ -291,8 +295,14 @@ app.post("/api/auth/forgot-password", async (req, res) => {
                    <p><a href="${resetLink}">Reset your password</a></p>
                    <p>If you did not request this, you can safely ignore this email.</p>`
           });
-        } catch (emailErr) {
-          console.error("Failed to send reset email:", emailErr);
+         console.log("Resend response:", JSON.stringify(response, null, 2));
+
+          } catch (emailErr) {
+            console.error(
+             "Failed to send reset email:",
+           JSON.stringify(emailErr, null, 2)
+  );
+}
           // Do not change the response — the user should not learn whether
           // sending succeeded, since that could leak account existence too.
         }
