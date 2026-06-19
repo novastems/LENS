@@ -242,6 +242,20 @@ const api = {
 
   getSearchAnalytics: (token) =>
     fetch(`${API_BASE}/admin/search-analytics`, { headers: { "Authorization": `Bearer ${token}` } }).then(r => r.json()),
+
+  forgotPassword: (email) =>
+    fetch(`${API_BASE}/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    }).then(r => r.json()),
+
+  resetPassword: (id, token, newPassword) =>
+    fetch(`${API_BASE}/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, token, newPassword })
+    }).then(r => r.json()),
 };
 
 function LensLogo({ size = 32 }) {
@@ -1260,6 +1274,97 @@ function TermsPage() {
   );
 }
 
+// Feature: Forgot Password — reset password page, reached via the emailed link
+function ResetPasswordPage({ resetParams, onNavigate, showToast }) {
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!newPassword || newPassword.length < 8) {
+      showToast("Password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast("Passwords do not match");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const result = await api.resetPassword(resetParams.id, resetParams.token, newPassword);
+      if (result.message) {
+        setDone(true);
+        showToast(result.message);
+      } else {
+        showToast(result.error || "Failed to reset password");
+      }
+    } catch (e) {
+      showToast("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="hero" style={{ paddingBottom: "3rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+          <LensLogo size={48} />
+        </div>
+        <h1>Reset Password</h1>
+      </div>
+
+      <div className="main" style={{ maxWidth: 480 }}>
+        <div className="form-card">
+          {done ? (
+            <>
+              <p style={{ fontSize: "0.9rem", color: "var(--slate)", marginBottom: "1.25rem", lineHeight: 1.6 }}>
+                Your password has been reset successfully. You can now sign in with your new password.
+              </p>
+              <button className="btn-sm btn-primary" style={{ width: "100%", padding: "0.7rem" }}
+                onClick={() => { window.location.hash = ""; onNavigate("home"); }}>
+                Go to LENS
+              </button>
+            </>
+          ) : (
+            <form onSubmit={handleSubmit}>
+              <p style={{ fontSize: "0.85rem", color: "var(--slate)", marginBottom: "1.25rem", lineHeight: 1.6 }}>
+                Enter a new password for your account. This reset link expires 1 hour after it was requested.
+              </p>
+              <div className="form-group">
+                <label>New Password <span>*</span></label>
+                <input className="form-input" type="password" placeholder="8+ characters" required
+                  value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Confirm Password <span>*</span></label>
+                <input className="form-input" type="password" placeholder="Re-enter password" required
+                  value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
+              </div>
+              <button type="submit" className="btn-sm btn-primary" style={{ width: "100%", padding: "0.7rem" }} disabled={submitting}>
+                {submitting ? "Resetting..." : "Reset Password"}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+
+      <div className="footer">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+          <LensLogo size={16} />
+          <strong>LENS</strong>
+        </div>
+        <div>Local Educational Network Search · Version 1.0</div>
+        <div className="footer-copyright">Forge Systems © 2023</div>
+      </div>
+    </div>
+  );
+}
+
 function PrivacyPage() {
   return (
     <div>
@@ -1437,6 +1542,28 @@ function AuthModal({ mode, onClose, onSuccess, showToast, onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ email: "", password: "", name: "" });
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  // Feature: Forgot Password — separate lightweight state, reuses this modal
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
+
+  const handleForgotSubmit = async () => {
+    if (!forgotEmail) {
+      showToast("Please enter your email");
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await api.forgotPassword(forgotEmail);
+      // Backend always returns the same generic message by design —
+      // this never reveals whether the email exists.
+      setForgotSent(true);
+      showToast(result.message || "If an account exists, a reset link has been sent");
+    } catch (e) {
+      showToast("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!form.email || !form.password) {
@@ -1480,24 +1607,59 @@ function AuthModal({ mode, onClose, onSuccess, showToast, onNavigate }) {
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
             <LensLogo size={24} />
             <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: "1.2rem", margin: 0 }}>
-              {tab === "login" ? "Sign In" : "Create Account"}
+              {tab === "login" ? "Sign In" : tab === "forgot" ? "Reset Password" : "Create Account"}
             </h2>
           </div>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
 
-        <div style={{ display: "flex", gap: "0", marginBottom: "1.25rem", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
-          {["login", "register"].map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{
-              flex: 1, padding: "0.55rem", border: "none", cursor: "pointer", fontFamily: "'DM Sans',sans-serif",
-              background: tab === t ? "var(--navy)" : "transparent",
-              color: tab === t ? "var(--white)" : "var(--slate)",
-            }}>
-              {t === "login" ? "Sign In" : "Register"}
-            </button>
-          ))}
-        </div>
+        {tab !== "forgot" && (
+          <div style={{ display: "flex", gap: "0", marginBottom: "1.25rem", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+            {["login", "register"].map(t => (
+              <button key={t} onClick={() => setTab(t)} style={{
+                flex: 1, padding: "0.55rem", border: "none", cursor: "pointer", fontFamily: "'DM Sans',sans-serif",
+                background: tab === t ? "var(--navy)" : "transparent",
+                color: tab === t ? "var(--white)" : "var(--slate)",
+              }}>
+                {t === "login" ? "Sign In" : "Register"}
+              </button>
+            ))}
+          </div>
+        )}
 
+        {tab === "forgot" && (
+          <>
+            <p style={{ fontSize: "0.85rem", color: "var(--slate)", marginBottom: "1rem", lineHeight: 1.5 }}>
+              Enter your account email and we'll send you a link to reset your password.
+            </p>
+            {forgotSent ? (
+              <div style={{ background: "var(--cream)", borderRadius: "var(--radius)", padding: "1rem", fontSize: "0.85rem", color: "var(--slate)", marginBottom: "1rem" }}>
+                If an account with that email exists, a password reset link has been sent. Please check your inbox.
+              </div>
+            ) : (
+              <div className="form-group">
+                <label>Email</label>
+                <input className="form-input" type="email" placeholder="your.email@university.edu.ph"
+                  value={forgotEmail} onChange={e => setForgotEmail(e.target.value)} />
+              </div>
+            )}
+            {!forgotSent && (
+              <button className="btn-sm btn-primary" style={{ width: "100%", padding: "0.7rem" }} onClick={handleForgotSubmit} disabled={loading}>
+                {loading ? "Sending..." : "Send Reset Link"}
+              </button>
+            )}
+            <button
+              type="button"
+              style={{ background: "none", border: "none", color: "var(--slate-light)", cursor: "pointer", fontSize: "0.8rem", marginTop: "1rem", textDecoration: "underline", display: "block", width: "100%", textAlign: "center" }}
+              onClick={() => { setTab("login"); setForgotSent(false); setForgotEmail(""); }}
+            >
+              Back to Sign In
+            </button>
+          </>
+        )}
+
+        {tab !== "forgot" && (
+        <>
         {tab === "register" && (
           <div className="form-group">
             <label>Name</label>
@@ -1516,6 +1678,15 @@ function AuthModal({ mode, onClose, onSuccess, showToast, onNavigate }) {
           <label>Password</label>
           <input className="form-input" type="password" placeholder="8+ characters"
             value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+          {tab === "login" && (
+            <button
+              type="button"
+              style={{ background: "none", border: "none", color: "var(--slate-light)", cursor: "pointer", fontSize: "0.78rem", marginTop: "0.4rem", textDecoration: "underline", padding: 0 }}
+              onClick={() => setTab("forgot")}
+            >
+              Forgot Password?
+            </button>
+          )}
         </div>
 
         {tab === "register" && (
@@ -1553,6 +1724,8 @@ function AuthModal({ mode, onClose, onSuccess, showToast, onNavigate }) {
             Demo: owner@lens.edu.ph / OwnerPassword123!
           </p>
         )}
+        </>
+        )}
       </div>
     </div>
   );
@@ -1566,6 +1739,8 @@ export default function App() {
   const [viewingPaper, setViewingPaper] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  // Feature: Forgot Password — holds token/id parsed from the reset link
+  const [resetPasswordParams, setResetPasswordParams] = useState(null);
   const [searchState, setSearchState] = useState({
     inputVal: "",
     results: [],
@@ -1616,6 +1791,19 @@ export default function App() {
     if (hash === "#/terms") { setPage("terms"); }
     else if (hash === "#/privacy") { setPage("privacy"); }
     else if (hash === "#/about") { setPage("about"); }
+    // Feature: Forgot Password — detect reset-password link from email
+    else if (hash.startsWith("#/reset-password")) {
+      const queryStart = hash.indexOf("?");
+      if (queryStart !== -1) {
+        const params = new URLSearchParams(hash.slice(queryStart + 1));
+        const resetToken = params.get("token");
+        const resetId = params.get("id");
+        if (resetToken && resetId) {
+          setResetPasswordParams({ token: resetToken, id: resetId });
+          setPage("reset-password");
+        }
+      }
+    }
 
     setLoading(false);
   }, []);
@@ -1737,6 +1925,7 @@ export default function App() {
       {page === "about" && <AboutPage />}
       {page === "terms" && <TermsPage />}
       {page === "privacy" && <PrivacyPage />}
+      {page === "reset-password" && resetPasswordParams && <ResetPasswordPage resetParams={resetPasswordParams} onNavigate={navigate} showToast={showToast} />}
       {page === "copyright" && <CopyrightPage />}
       {page === "paper" && viewingPaper && <PaperDetail paper={viewingPaper} onBack={handleBackFromPaper} showToast={showToast} />}
       {page === "upload" && user && <UploadPage user={user} showToast={showToast} onNavigate={navigate} />}
