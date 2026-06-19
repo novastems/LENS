@@ -1092,7 +1092,7 @@ function HomePage({ onNavigate, onViewPaper }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "1rem", marginBottom: "1.5rem" }}>
           <LensLogo size={48} />
         </div>
-        <div className="hero-eyebrow">Local Educational Network Search</div>
+        <div className="hero-eyebrow">Think fast, Search faster.</div>
         <h1>Discover Student Research</h1>
         <p className="hero-sub">Centralized academic repository for student and faculty research.</p>
 
@@ -1129,8 +1129,8 @@ function HomePage({ onNavigate, onViewPaper }) {
           <LensLogo size={16} />
           <strong>LENS</strong>
         </div>
-        <div>Local Educational Network Search · Version 1.0</div>
-        <div className="footer-copyright">Forge Systems © 2023</div>
+        <div>LENS · Version 1.0</div>
+        <div className="footer-copyright">Nova-Forge Systems © 2023</div>
       </div>
     </div>
   );
@@ -1258,7 +1258,7 @@ function TermsPage() {
 
         <div className="content-block">
           <h2>12. Contact Information</h2>
-          <p>For questions regarding these Terms and Conditions, please contact NovaForge Systems through the LENS platform.</p>
+          <p>For questions regarding these Terms and Conditions, please contact NovaForge Systems through systemsnovaforge@gmail.com.</p>
         </div>
       </div>
 
