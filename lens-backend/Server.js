@@ -77,6 +77,9 @@ async function connectDB() {
     if (!collectionNames.includes("schools")) {
       await db.createCollection("schools");
     }
+    if (!collectionNames.includes("searchlogs")) {
+      await db.createCollection("searchlogs");
+    }
 
     await createIndexes();
     console.log("✓ Database indexes created");
@@ -107,6 +110,8 @@ async function createIndexes() {
     await db.collection("auditlogs").createIndex({ action: 1 }).catch(() => {});
     await db.collection("auditlogs").createIndex({ timestamp: -1 }).catch(() => {});
     await db.collection("schools").createIndex({ name: 1 }, { unique: true }).catch(() => {});
+    await db.collection("searchlogs").createIndex({ timestamp: -1 }).catch(() => {});
+    await db.collection("searchlogs").createIndex({ term: 1 }).catch(() => {});
   } catch (e) {
     console.error("Error creating indexes:", e.message);
   }
@@ -308,6 +313,7 @@ app.post("/api/papers", authenticateToken, upload.single("pdf"), async (req, res
     await db.collection("auditlogs").insertOne({
       action: "paper_uploaded",
       userId: String(req.user.userId),
+      userName: req.user.name,
       paperId: String(result.insertedId),
       details: { title, school, region, city, category },
       timestamp: new Date(),
@@ -473,6 +479,10 @@ app.get("/api/search/local", async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     console.log(`[SEARCH] Query: "${q}" | Region: ${region} | City: ${city} | School: ${school} | Year: ${yearFrom}-${yearTo} | Category: ${category}`);
 
+    // Issue #7: lightweight search term logging — term + timestamp only, no user/IP data.
+    // Fire-and-forget so a logging failure never affects the search response.
+    db.collection("searchlogs").insertOne({ term: q.trim(), timestamp: new Date() }).catch(() => {});
+
     // Issue #4 fix: split into words, separate meaningful words from stop words.
     // Meaningful words are required to match (AND). Stop words are ignored unless
     // the entire query is made of stop words, in which case we fall back to them
@@ -622,6 +632,10 @@ app.get("/api/categories", async (req, res) => {
 // ─── ADMIN: STATS ────────────────────────────────────────────────────────
 app.get("/api/admin/stats", authenticateToken, requireRole(["admin", "owner"]), async (req, res) => {
   try {
+    // Enhanced Overview: month boundary for "this month" counters
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
     const stats = {
       totalPapers: await db.collection("researchpapers").countDocuments(),
       approvedPapers: await db.collection("researchpapers").countDocuments({ status: "approved" }),
@@ -631,6 +645,8 @@ app.get("/api/admin/stats", authenticateToken, requireRole(["admin", "owner"]), 
       totalUsers: await db.collection("users").countDocuments(),
       totalUniversities: (await db.collection("researchpapers").distinct("school")).length,
       suspendedUsers: await db.collection("users").countDocuments({ suspended: true }),
+      papersThisMonth: await db.collection("researchpapers").countDocuments({ createdAt: { $gte: startOfMonth } }),
+      downloadsThisMonth: await db.collection("downloads").countDocuments({ downloadedAt: { $gte: startOfMonth } }),
     };
 
     res.json(stats);
@@ -677,6 +693,7 @@ app.put("/api/admin/papers/:id/status", authenticateToken, requireRole(["admin",
     await db.collection("auditlogs").insertOne({
       action: `paper_${status}`,
       userId: String(req.user.userId),
+      userName: req.user.name,
       paperId: String(req.params.id),
       details: { title: paper.title, reason },
       timestamp: new Date(),
@@ -690,7 +707,98 @@ app.put("/api/admin/papers/:id/status", authenticateToken, requireRole(["admin",
   }
 });
 
-// ─── ADMIN: GET USERS ──────────────────────────────────────────────────
+// ─── ADMIN: ANALYTICS (Issues #4, #5, #6 on dashboard plan) ──────────────
+// Upload trend, download trend, user growth (last 6 months), category
+// breakdown, and top uploading institutions. Uses only existing fields
+// (createdAt, downloadedAt, category, school) — no schema changes.
+app.get("/api/admin/analytics", authenticateToken, requireRole(["admin", "owner"]), async (req, res) => {
+  try {
+    const now = new Date();
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+    const monthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+
+    // Build the list of the last 6 month buckets so charts always show 6
+    // points even for months with zero activity.
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({ key: monthKey(d), label: d.toLocaleString("default", { month: "short" }) });
+    }
+
+    const uploads = await db.collection("researchpapers")
+      .find({ createdAt: { $gte: sixMonthsAgo } }, { projection: { createdAt: 1 } })
+      .toArray();
+    const uploadCounts = {};
+    uploads.forEach(p => {
+      const k = monthKey(new Date(p.createdAt));
+      uploadCounts[k] = (uploadCounts[k] || 0) + 1;
+    });
+
+    const downloadDocs = await db.collection("downloads")
+      .find({ downloadedAt: { $gte: sixMonthsAgo } }, { projection: { downloadedAt: 1 } })
+      .toArray();
+    const downloadCounts = {};
+    downloadDocs.forEach(d => {
+      const k = monthKey(new Date(d.downloadedAt));
+      downloadCounts[k] = (downloadCounts[k] || 0) + 1;
+    });
+
+    const userDocs = await db.collection("users")
+      .find({ createdAt: { $gte: sixMonthsAgo } }, { projection: { createdAt: 1 } })
+      .toArray();
+    const userCounts = {};
+    userDocs.forEach(u => {
+      const k = monthKey(new Date(u.createdAt));
+      userCounts[k] = (userCounts[k] || 0) + 1;
+    });
+
+    const uploadTrend = months.map(m => ({ month: m.label, count: uploadCounts[m.key] || 0 }));
+    const downloadTrend = months.map(m => ({ month: m.label, count: downloadCounts[m.key] || 0 }));
+    const userGrowth = months.map(m => ({ month: m.label, count: userCounts[m.key] || 0 }));
+
+    // Category breakdown (approved papers only, mirrors public-facing data)
+    const categoryAgg = await db.collection("researchpapers").aggregate([
+      { $match: { status: "approved" } },
+      { $group: { _id: "$category", count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]).toArray();
+    const categoryStats = categoryAgg.map(c => ({ category: c._id || "Uncategorized", count: c.count }));
+
+    // Top uploading institutions
+    const schoolAgg = await db.collection("researchpapers").aggregate([
+      { $match: { status: "approved" } },
+      { $group: { _id: "$school", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]).toArray();
+    const institutionStats = schoolAgg.map(s => ({ school: s._id || "Unknown", count: s.count }));
+
+    res.json({ uploadTrend, downloadTrend, userGrowth, categoryStats, institutionStats });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to fetch analytics" });
+  }
+});
+
+// ─── ADMIN: SEARCH ANALYTICS (Issue #7) ───────────────────────────────────
+// Most searched terms, aggregated from the lightweight searchlogs collection.
+app.get("/api/admin/search-analytics", authenticateToken, requireRole(["admin", "owner"]), async (req, res) => {
+  try {
+    const topTerms = await db.collection("searchlogs").aggregate([
+      { $group: { _id: { $toLower: "$term" }, count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]).toArray();
+
+    res.json({ topTerms: topTerms.map(t => ({ term: t._id, count: t.count })) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to fetch search analytics" });
+  }
+});
+
+
 app.get("/api/admin/users", authenticateToken, requireRole(["admin", "owner"]), async (req, res) => {
   try {
     const users = await db.collection("users")
@@ -708,13 +816,40 @@ app.get("/api/admin/users", authenticateToken, requireRole(["admin", "owner"]), 
 // ─── ADMIN: AUDIT LOGS ────────────────────────────────────────────────
 app.get("/api/admin/audit-logs", authenticateToken, requireRole(["admin", "owner"]), async (req, res) => {
   try {
+    const { page = 1, limit = 20, search = "", action } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    let filter = {};
+    if (action) filter.action = action;
+    if (search) {
+      filter["details.title"] = new RegExp(search.trim(), "i");
+    }
+
     const logs = await db.collection("auditlogs")
-      .find({})
+      .find(filter, { projection: { userId: 0, paperId: 0, ipAddress: 0 } })
       .sort({ timestamp: -1 })
-      .limit(500)
+      .skip(skip)
+      .limit(parseInt(limit))
       .toArray();
 
-    res.json(logs);
+    // Security: never expose Mongo IDs or IPs. Older logs predating the
+    // userName field fall back to "unknown" rather than leaking the ID.
+    const safeLogs = logs.map(log => ({
+      ...log,
+      userName: log.userName || "unknown"
+    }));
+
+    const total = await db.collection("auditlogs").countDocuments(filter);
+
+    res.json({
+      logs: safeLogs,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Failed to fetch logs" });

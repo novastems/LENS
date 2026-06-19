@@ -108,6 +108,21 @@ const CSS = `
   .metric-card { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.25rem; border-left: 3px solid var(--gold); }
   .metric-card .label { font-size: 0.75rem; color: var(--slate-light); text-transform: uppercase; margin-bottom: 0.35rem; }
   .metric-card .value { font-family: 'Playfair Display', serif; font-size: 1.9rem; color: var(--navy); font-weight: 600; }
+
+  /* Admin dashboard enhancement additions — reuse existing tokens, no redesign */
+  .metric-card.metric-card-secondary { border-left-color: var(--slate-light); }
+  .chart-panel { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1.5rem; }
+  .chart-panel h3 { font-size: 0.95rem; font-weight: 600; color: var(--navy); margin-bottom: 1rem; font-family: 'DM Sans', sans-serif; }
+  .chart-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  .bar-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.6rem; }
+  .bar-row .bar-label { font-size: 0.8rem; color: var(--slate); width: 130px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-row .bar-track { flex: 1; background: var(--cream-mid); border-radius: 100px; height: 10px; overflow: hidden; }
+  .bar-row .bar-fill { background: var(--gold); height: 100%; border-radius: 100px; transition: width 0.6s ease; }
+  .bar-row .bar-value { font-size: 0.78rem; color: var(--navy); font-weight: 600; width: 36px; text-align: right; flex-shrink: 0; }
+  .history-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+  .reject-reason-select { width: 100%; padding: 0.5rem 0.7rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--cream); font-family: 'DM Sans', sans-serif; font-size: 0.82rem; color: var(--navy); margin-top: 0.5rem; }
+  .pagination-row { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-top: 1.25rem; }
+  .pagination-row span { font-size: 0.82rem; color: var(--slate-light); }
   .data-table { width: 100%; border-collapse: collapse; background: var(--white); border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--border); }
   .data-table th { background: var(--cream); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--slate-light); padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
   .data-table td { padding: 0.85rem 1rem; font-size: 0.875rem; border-bottom: 1px solid var(--border); color: var(--navy); }
@@ -218,6 +233,15 @@ const api = {
 
   getUsers: (token) =>
     fetch(`${API_BASE}/admin/users`, { headers: { "Authorization": `Bearer ${token}` } }).then(r => r.json()),
+
+  getAuditLogs: (token, page = 1, search = "", action = "") =>
+    fetch(`${API_BASE}/admin/audit-logs?page=${page}&limit=20&search=${encodeURIComponent(search)}&action=${encodeURIComponent(action)}`, { headers: { "Authorization": `Bearer ${token}` } }).then(r => r.json()),
+
+  getAnalytics: (token) =>
+    fetch(`${API_BASE}/admin/analytics`, { headers: { "Authorization": `Bearer ${token}` } }).then(r => r.json()),
+
+  getSearchAnalytics: (token) =>
+    fetch(`${API_BASE}/admin/search-analytics`, { headers: { "Authorization": `Bearer ${token}` } }).then(r => r.json()),
 };
 
 function LensLogo({ size = 32 }) {
