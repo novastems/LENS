@@ -9,7 +9,19 @@ const bcrypt = require("bcryptjs");
 const { MongoClient, ObjectId } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 require("dotenv").config();
+
+// Feature: Forgot Password — Resend email client. If RESEND_API_KEY is not
+// set, resetEmailClient stays null and the forgot-password route logs a
+// clear warning instead of crashing the server.
+let resetEmailClient = null;
+if (process.env.RESEND_API_KEY) {
+  const { Resend } = require("resend");
+  resetEmailClient = new Resend(process.env.RESEND_API_KEY);
+} else {
+  console.warn("⚠ RESEND_API_KEY not set — password reset emails will not be sent.");
+}
 
 const app = express();
 app.use(cors());
@@ -92,6 +104,7 @@ async function connectDB() {
 async function createIndexes() {
   try {
     await db.collection("users").createIndex({ email: 1 }, { unique: true }).catch(() => {});
+    await db.collection("users").createIndex({ resetTokenHash: 1 }, { sparse: true }).catch(() => {});
     await db.collection("researchpapers").createIndex(
       { title: "text", abstract: "text", keywords: "text", tags: "text" }
     ).catch(() => {});
@@ -236,7 +249,122 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// ─── PAPERS: UPLOAD ───────────────────────────────────────────────────────
+// ─── AUTH: FORGOT PASSWORD ─────────────────────────────────────────────────
+// Always responds with the same generic message whether or not the email
+// exists, so this endpoint can never be used to enumerate registered users.
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const genericResponse = { message: "If an account with that email exists, a password reset link has been sent." };
+
+  try {
+    const { email } = req.body;
+    if (!email) {
+      // Still generic — do not reveal that the field itself was the problem.
+      return res.json(genericResponse);
+    }
+
+    const user = await db.collection("users").findOne({ email });
+
+    if (user) {
+      // Generate a random token, store only its hash (never the raw token).
+      // This matches the same principle as password hashing — if the
+      // database were ever exposed, the raw reset token cannot be recovered.
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+      await db.collection("users").updateOne(
+        { _id: user._id },
+        { $set: { resetTokenHash: tokenHash, resetTokenExpiry: expiry } }
+      );
+
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+      const resetLink = `${frontendUrl}/#/reset-password?token=${rawToken}&id=${user._id}`;
+
+      if (resetEmailClient) {
+        try {
+          await resetEmailClient.emails.send({
+            from: process.env.RESET_EMAIL_FROM || "LENS <onboarding@resend.dev>",
+            to: email,
+            subject: "Reset your LENS password",
+            html: `<p>Hello${user.name ? " " + user.name : ""},</p>
+                   <p>We received a request to reset your LENS password. This link expires in 1 hour.</p>
+                   <p><a href="${resetLink}">Reset your password</a></p>
+                   <p>If you did not request this, you can safely ignore this email.</p>`
+          });
+        } catch (emailErr) {
+          console.error("Failed to send reset email:", emailErr);
+          // Do not change the response — the user should not learn whether
+          // sending succeeded, since that could leak account existence too.
+        }
+      } else {
+        console.warn(`RESEND_API_KEY not configured — reset link for ${email}: ${resetLink}`);
+      }
+    }
+
+    res.json(genericResponse);
+  } catch (e) {
+    console.error("Forgot password error:", e);
+    // Even on internal error, do not leak details — return the generic message.
+    res.json(genericResponse);
+  }
+});
+
+// ─── AUTH: RESET PASSWORD ──────────────────────────────────────────────────
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { id, token, newPassword } = req.body;
+
+    if (!id || !token || !newPassword) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+
+    let user;
+    try {
+      user = await db.collection("users").findOne({ _id: new ObjectId(id) });
+    } catch {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+
+    if (!user || !user.resetTokenHash || !user.resetTokenExpiry) {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+
+    if (new Date(user.resetTokenExpiry) < new Date()) {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+    // Timing-safe comparison to avoid leaking information via response timing.
+    const providedBuf = Buffer.from(tokenHash);
+    const storedBuf = Buffer.from(user.resetTokenHash);
+    const validToken = providedBuf.length === storedBuf.length && crypto.timingSafeEqual(providedBuf, storedBuf);
+
+    if (!validToken) {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await db.collection("users").updateOne(
+      { _id: user._id },
+      {
+        $set: { password: hashedPassword, loginAttempts: 0, suspended: false },
+        $unset: { resetTokenHash: "", resetTokenExpiry: "" }
+      }
+    );
+
+    res.json({ message: "Password reset successfully. You can now sign in." });
+  } catch (e) {
+    console.error("Reset password error:", e);
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
+
 app.post("/api/papers", authenticateToken, upload.single("pdf"), async (req, res) => {
   try {
     console.log("Upload request received");
@@ -535,19 +663,35 @@ app.get("/api/search/local", async (req, res) => {
       .limit(500)
       .toArray();
 
-    // Issue #4 fix: relevance ranking. Count how many distinct meaningful
-    // words match the TITLE specifically (highest weight), then how many
-    // searchable fields overall contain a match. Papers matching more
-    // search terms, especially in the title, rank highest.
+    // Smart Search relevance ranking. Tiers (highest to lowest):
+    //   1. Exact phrase match anywhere       — strongest signal, large bonus
+    //   2. Title match                       — primary signal
+    //   3. Keywords / tags match              — curated terms, ranks above abstract
+    //   4. Abstract match                    — body text, ranks above bare metadata
+    //   5. Category / field / school match   — metadata only, weakest signal
+    // Papers matching more of the meaningful query words score higher within
+    // each tier too, since the loop below accumulates per-word per-field.
+    const fullPhraseRegex = searchWords.length > 1
+      ? new RegExp(`\\b${searchWords.map(escapeRegex).join("\\s+")}`, "i")
+      : null;
+
     const scored = results.map(paper => {
       let score = 0;
+
+      // Phrase bonus: query words appearing together, in order, as typed.
+      if (fullPhraseRegex) {
+        const haystack = `${paper.title || ""} ${paper.abstract || ""}`;
+        if (fullPhraseRegex.test(haystack)) score += 10;
+      }
+
       for (const regex of wordRegexes) {
-        if (regex.test(paper.title || "")) score += 3;
-        if (regex.test(paper.abstract || "")) score += 1;
-        if ((paper.keywords || []).some(k => regex.test(k))) score += 2;
-        if ((paper.tags || []).some(t => regex.test(t))) score += 2;
+        if (regex.test(paper.title || "")) score += 5;
+        if ((paper.keywords || []).some(k => regex.test(k))) score += 3;
+        if ((paper.tags || []).some(t => regex.test(t))) score += 3;
+        if (regex.test(paper.abstract || "")) score += 2;
         if (regex.test(paper.category || "")) score += 1;
         if (regex.test(paper.field || "")) score += 1;
+        if (regex.test(paper.school || "")) score += 1;
       }
       return { paper, score };
     });
