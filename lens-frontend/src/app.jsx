@@ -967,11 +967,52 @@ function UploadPage({ user, showToast, onNavigate }) {
   );
 }
 
+function CountUp({ value }) {
+  const [display, setDisplay] = useState(0);
+  useEffect(() => {
+    let start = 0;
+    const end = value || 0;
+    if (end === 0) { setDisplay(0); return; }
+    const duration = 600;
+    const stepTime = 16;
+    const steps = Math.ceil(duration / stepTime);
+    const increment = end / steps;
+    let current = 0;
+    const timer = setInterval(() => {
+      current += increment;
+      if (current >= end) {
+        setDisplay(end);
+        clearInterval(timer);
+      } else {
+        setDisplay(Math.floor(current));
+      }
+    }, stepTime);
+    return () => clearInterval(timer);
+  }, [value]);
+  return <>{display.toLocaleString()}</>;
+}
+
 function AdminDashboard({ user, showToast }) {
   const [page, setPage] = useState("overview");
   const [stats, setStats] = useState(null);
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
+  // History page state — additive
+  const [historyTab, setHistoryTab] = useState("approved");
+  const [historyLogs, setHistoryLogs] = useState([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [historySearch, setHistorySearch] = useState("");
+  // Analytics page state — additive
+  const [analytics, setAnalytics] = useState(null);
+  const [searchAnalytics, setSearchAnalytics] = useState(null);
+  // Audit Logs page state — additive
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditTotalPages, setAuditTotalPages] = useState(1);
+  // Reject flow state — additive
+  const [rejectingId, setRejectingId] = useState(null);
+  const [rejectReason, setRejectReason] = useState("Duplicate paper");
 
   useEffect(() => {
     loadData();
@@ -1002,16 +1043,68 @@ function AdminDashboard({ user, showToast }) {
     }
   };
 
+  // New: reject flow, mirrors handleApprove, does not modify it
+  const handleReject = async (id) => {
+    try {
+      await api.updatePaperStatus(id, "rejected", rejectReason, user.token);
+      showToast("Paper rejected");
+      setRejectingId(null);
+      loadData();
+    } catch (e) {
+      showToast("Error");
+    }
+  };
+
+  // New: load History page data when that tab/page/search changes
+  useEffect(() => {
+    if (page !== "history") return;
+    const action = historyTab === "approved" ? "paper_approved" : "paper_rejected";
+    api.getAuditLogs(user.token, historyPage, historySearch, action)
+      .then(result => {
+        setHistoryLogs(result.logs || []);
+        setHistoryTotalPages(result.pagination?.pages || 1);
+      })
+      .catch(e => console.error("Failed to load history:", e));
+  }, [page, historyTab, historyPage, historySearch, user]);
+
+  // New: load Analytics page data once when that tab is opened
+  useEffect(() => {
+    if (page !== "analytics") return;
+    api.getAnalytics(user.token).then(setAnalytics).catch(e => console.error("Failed to load analytics:", e));
+    api.getSearchAnalytics(user.token).then(setSearchAnalytics).catch(e => console.error("Failed to load search analytics:", e));
+  }, [page, user]);
+
+  // New: load Audit Logs page data when that page changes
+  useEffect(() => {
+    if (page !== "auditlogs") return;
+    api.getAuditLogs(user.token, auditPage)
+      .then(result => {
+        setAuditLogs(result.logs || []);
+        setAuditTotalPages(result.pagination?.pages || 1);
+      })
+      .catch(e => console.error("Failed to load audit logs:", e));
+  }, [page, auditPage, user]);
+
   if (loading) return <div className="loading-wrap"><div className="spinner" /></div>;
+
+  const sidebarItems = [
+    { key: "overview", label: "Overview" },
+    { key: "submissions", label: "Submissions" },
+    { key: "history", label: "History" },
+    { key: "analytics", label: "Analytics" },
+    { key: "auditlogs", label: "Audit Logs" },
+  ];
+
+  const maxOf = (arr) => Math.max(...arr.map(x => x.count), 1);
 
   return (
     <div className="admin-layout">
       <div className="admin-sidebar">
         <div className="admin-sidebar-title">Admin</div>
-        {["overview", "submissions"].map(p => (
-          <button key={p} className={`admin-nav-item ${page === p ? "active" : ""}`}
-            onClick={() => setPage(p)}>
-            {p === "overview" ? "Overview" : "Submissions"}
+        {sidebarItems.map(item => (
+          <button key={item.key} className={`admin-nav-item ${page === item.key ? "active" : ""}`}
+            onClick={() => setPage(item.key)}>
+            {item.label}
           </button>
         ))}
       </div>
@@ -1021,10 +1114,14 @@ function AdminDashboard({ user, showToast }) {
           <>
             <div className="admin-header"><h1>Overview</h1></div>
             <div className="metric-grid">
-              <div className="metric-card"><div className="label">Papers</div><div className="value">{stats.totalPapers || 0}</div></div>
-              <div className="metric-card"><div className="label">Downloads</div><div className="value">{stats.totalDownloads || 0}</div></div>
-              <div className="metric-card"><div className="label">Users</div><div className="value">{stats.totalUsers || 0}</div></div>
-              <div className="metric-card"><div className="label">Pending</div><div className="value">{stats.pendingPapers || 0}</div></div>
+              <div className="metric-card"><div className="label">Papers</div><div className="value"><CountUp value={stats.totalPapers || 0} /></div></div>
+              <div className="metric-card"><div className="label">Downloads</div><div className="value"><CountUp value={stats.totalDownloads || 0} /></div></div>
+              <div className="metric-card"><div className="label">Users</div><div className="value"><CountUp value={stats.totalUsers || 0} /></div></div>
+              <div className="metric-card"><div className="label">Pending</div><div className="value"><CountUp value={stats.pendingPapers || 0} /></div></div>
+              <div className="metric-card metric-card-secondary"><div className="label">Approved</div><div className="value"><CountUp value={stats.approvedPapers || 0} /></div></div>
+              <div className="metric-card metric-card-secondary"><div className="label">Rejected</div><div className="value"><CountUp value={stats.rejectedPapers || 0} /></div></div>
+              <div className="metric-card metric-card-secondary"><div className="label">Papers This Month</div><div className="value"><CountUp value={stats.papersThisMonth || 0} /></div></div>
+              <div className="metric-card metric-card-secondary"><div className="label">Downloads This Month</div><div className="value"><CountUp value={stats.downloadsThisMonth || 0} /></div></div>
             </div>
           </>
         )}
@@ -1045,13 +1142,216 @@ function AdminDashboard({ user, showToast }) {
                       <td>{p.title}</td>
                       <td>{p.school}</td>
                       <td>
-                        <button className="btn-sm btn-primary" onClick={() => handleApprove(p._id)}>Approve</button>
+                        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                          <button className="btn-sm btn-primary" onClick={() => handleApprove(p._id)}>Approve</button>
+                          <button className="btn-sm btn-outline" onClick={() => setRejectingId(rejectingId === p._id ? null : p._id)}>Reject</button>
+                        </div>
+                        {rejectingId === p._id && (
+                          <div style={{ marginTop: "0.5rem", minWidth: "220px" }}>
+                            <select className="reject-reason-select" value={rejectReason} onChange={e => setRejectReason(e.target.value)}>
+                              <option>Duplicate paper</option>
+                              <option>Corrupted PDF</option>
+                              <option>Wrong category</option>
+                              <option>Incomplete document</option>
+                              <option>Other</option>
+                            </select>
+                            <button className="btn-sm btn-primary" style={{ marginTop: "0.5rem" }} onClick={() => handleReject(p._id)}>
+                              Confirm Reject
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
+          </>
+        )}
+
+        {page === "history" && (
+          <>
+            <div className="admin-header"><h1>Approval History</h1></div>
+
+            <div className="history-tabs">
+              <button className={`btn-sm ${historyTab === "approved" ? "btn-primary" : "btn-outline"}`}
+                onClick={() => { setHistoryTab("approved"); setHistoryPage(1); }}>
+                Approved
+              </button>
+              <button className={`btn-sm ${historyTab === "rejected" ? "btn-primary" : "btn-outline"}`}
+                onClick={() => { setHistoryTab("rejected"); setHistoryPage(1); }}>
+                Rejected
+              </button>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <input
+                className="form-input"
+                style={{ maxWidth: 320 }}
+                placeholder="Search by paper title..."
+                value={historySearch}
+                onChange={e => { setHistorySearch(e.target.value); setHistoryPage(1); }}
+              />
+            </div>
+
+            {historyLogs.length === 0 ? (
+              <div className="empty-state"><p>No {historyTab} papers yet</p></div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Paper</th>
+                    {historyTab === "rejected" && <th>Reason</th>}
+                    <th>Admin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyLogs.map((log, i) => (
+                    <tr key={i}>
+                      <td>{new Date(log.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</td>
+                      <td>{log.details?.title || "—"}</td>
+                      {historyTab === "rejected" && <td>{log.details?.reason || "—"}</td>}
+                      <td>{log.userName}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <div className="pagination-row">
+              <button className="btn-sm btn-outline" disabled={historyPage <= 1}
+                onClick={() => setHistoryPage(p => p - 1)}>Previous</button>
+              <span>Page {historyPage} of {historyTotalPages}</span>
+              <button className="btn-sm btn-outline" disabled={historyPage >= historyTotalPages}
+                onClick={() => setHistoryPage(p => p + 1)}>Next</button>
+            </div>
+          </>
+        )}
+
+        {page === "analytics" && analytics && (
+          <>
+            <div className="admin-header"><h1>Analytics</h1></div>
+
+            <div className="chart-grid-2">
+              <div className="chart-panel">
+                <h3>Upload Trend (last 6 months)</h3>
+                {analytics.uploadTrend.map((m, i) => (
+                  <div className="bar-row" key={i}>
+                    <span className="bar-label">{m.month}</span>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${Math.min(100, (m.count / maxOf(analytics.uploadTrend)) * 100)}%` }} />
+                    </div>
+                    <span className="bar-value">{m.count}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="chart-panel">
+                <h3>Download Trend (last 6 months)</h3>
+                {analytics.downloadTrend.map((m, i) => (
+                  <div className="bar-row" key={i}>
+                    <span className="bar-label">{m.month}</span>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${Math.min(100, (m.count / maxOf(analytics.downloadTrend)) * 100)}%` }} />
+                    </div>
+                    <span className="bar-value">{m.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="chart-panel">
+              <h3>User Growth (last 6 months)</h3>
+              {analytics.userGrowth.map((m, i) => (
+                <div className="bar-row" key={i}>
+                  <span className="bar-label">{m.month}</span>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${Math.min(100, (m.count / maxOf(analytics.userGrowth)) * 100)}%` }} />
+                  </div>
+                  <span className="bar-value">{m.count}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="chart-grid-2">
+              <div className="chart-panel">
+                <h3>Papers by Course / Field</h3>
+                <table className="data-table">
+                  <thead><tr><th>Category</th><th>Papers</th></tr></thead>
+                  <tbody>
+                    {analytics.categoryStats.map((c, i) => (
+                      <tr key={i}><td>{c.category}</td><td>{c.count}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="chart-panel">
+                <h3>Top Uploading Schools</h3>
+                {analytics.institutionStats.map((s, i) => (
+                  <div className="bar-row" key={i}>
+                    <span className="bar-label">{s.school}</span>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${Math.min(100, (s.count / maxOf(analytics.institutionStats)) * 100)}%` }} />
+                    </div>
+                    <span className="bar-value">{s.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {searchAnalytics && (
+              <div className="chart-panel">
+                <h3>Most Searched Terms</h3>
+                {searchAnalytics.topTerms.length === 0 ? (
+                  <p style={{ fontSize: "0.85rem", color: "var(--slate-light)" }}>No search activity yet</p>
+                ) : (
+                  searchAnalytics.topTerms.map((t, i) => (
+                    <div className="bar-row" key={i}>
+                      <span className="bar-label">{t.term}</span>
+                      <div className="bar-track">
+                        <div className="bar-fill" style={{ width: `${Math.min(100, (t.count / maxOf(searchAnalytics.topTerms)) * 100)}%` }} />
+                      </div>
+                      <span className="bar-value">{t.count}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {page === "auditlogs" && (
+          <>
+            <div className="admin-header"><h1>Audit Logs</h1></div>
+
+            {auditLogs.length === 0 ? (
+              <div className="empty-state"><p>No audit log entries</p></div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr><th>Time</th><th>Action</th><th>User</th></tr>
+                </thead>
+                <tbody>
+                  {auditLogs.map((log, i) => (
+                    <tr key={i}>
+                      <td>{new Date(log.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                      <td>{log.action}</td>
+                      <td>{log.userName}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <div className="pagination-row">
+              <button className="btn-sm btn-outline" disabled={auditPage <= 1}
+                onClick={() => setAuditPage(p => p - 1)}>Previous</button>
+              <span>Page {auditPage} of {auditTotalPages}</span>
+              <button className="btn-sm btn-outline" disabled={auditPage >= auditTotalPages}
+                onClick={() => setAuditPage(p => p + 1)}>Next</button>
+            </div>
           </>
         )}
       </div>
